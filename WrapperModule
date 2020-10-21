@@ -1,0 +1,108 @@
+-- DESCRIPTION:
+-- Enables the wrapping of instances for easy creation of new properties for said instance.
+
+-- DEPENDENCIES:
+-- Signal module by TiffBlocks https://devforum.roblox.com/t/is-it-possible-to-make-a-custom-rbxscriptsignal-with-oop/124981/5
+
+-- LIMITATIONS:
+-- Wrapped instances MUST NOT BE MOVED after wrapped
+-- The wrapped instance's name MUST BE UNIQUE among its parent's children
+-- Do not use the instance's original functions. If you need to use them, then define a new function in Wrap analogous to wrappedInstance:GetFullName()
+
+local Signal = require(script.Parent.SignalModule)
+
+local Wrapper = {}
+
+-- a table of all wrapped objects in the server, key = full path of the object, value = the wrapped object
+allWrapped = {}
+
+local function checkForProperty(obj, prop)
+    return ({pcall(function()if(typeof(obj[prop])=="Instance")then error()end end)})[1]
+end
+
+-- MAIN WRAPPER FUNCTIONS
+-------------------------------------------------------------------------------------
+-- WRAP INSTANCE
+function Wrapper:Wrap(instance)
+	
+	-- SETUP METATABLES
+-------------------------------------------------------------------------------------
+	local interface = {}
+	
+	local behavior = {
+		__index = instance,
+		
+		__newindex = function(tbl, key, value)
+			--print("WRAPPER behavior __newindex: key=" .. tostring(key) .. ", value=" .. tostring(value))
+			if checkForProperty(instance, key) and string.sub(key, 1, 3) ~= "Get" and type(value) ~= "function" then
+				instance[key] = value
+			else
+				rawset(interface, key, value)
+			end
+		end
+	} 
+	
+	local wrappedInstance = setmetatable(interface, behavior)
+	
+	-- proxy for wrappedInstance
+	local proxy = setmetatable({}, {
+		__index = function(tbl, key)
+			--print("GET PROPERTY " .. tostring(key) .. ": " .. tostring(wrappedInstance[key]))
+			return wrappedInstance[key]
+		end,
+		
+		__newindex = function(tbl, key, value)
+			--print("SET PROPERTY " .. tostring(key) .. " to: " .. tostring(value))
+			
+			wrappedInstance[key] = value
+			
+			if wrappedInstance.listeningCustomPropertyChange[key] then
+				--[[
+				print("FIRE - " .. key .. ": " .. value) -- <-- DEBUG
+				for k,v in pairs(wrappedInstance.listeningCustomPropertyChange) do
+					print("{" .. tostring(k) .. "," .. tostring(v) .. "}")
+				end
+				print(wrappedInstance.listeningCustomPropertyChange[key])
+				]]
+				wrappedInstance.listeningCustomPropertyChange[key]:Fire(value)
+			end
+		end
+	})
+	
+	-- SETUP FUNCTIONS
+-------------------------------------------------------------------------------------
+	wrappedInstance.listeningCustomPropertyChange = {}
+	 
+	function wrappedInstance:GetCustomProperty(propertyName)
+		--print("GETTING CUSTOM PROPERTY " .. propertyName .. ": " .. tostring(rawget(interface, propertyName)))
+		if rawget(interface, propertyName) then
+			return rawget(interface, propertyName)
+		else
+			return false	
+		end
+	end
+	
+	function wrappedInstance:GetCustomPropertyChangedSignal(propertyName)
+		--print("GET PROPERTY FOR " .. instance:GetFullName() .. " - " .. propertyName .. ": " .. tostring(wrappedInstance:GetCustomProperty(propertyName)))
+		if not(wrappedInstance:GetCustomProperty(propertyName)) then return false end
+		
+		local function ctor() end
+		local function dtor() wrappedInstance.listeningCustomPropertyChange[propertyName] = nil end
+		
+		local customPropertyChangedSignal = Signal(ctor, dtor)
+		wrappedInstance.listeningCustomPropertyChange[propertyName] = customPropertyChangedSignal
+		
+		return customPropertyChangedSignal
+	end
+	
+	allWrapped[instance:GetFullName()] = proxy
+	
+	return Wrapper:GetWrapped(instance)
+end
+
+-- GET WRAPPED INSTANCE
+function Wrapper:GetWrapped(instance)
+	return allWrapped[instance:GetFullName()]
+end
+
+return Wrapper
